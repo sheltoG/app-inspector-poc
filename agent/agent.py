@@ -3,18 +3,31 @@ App Inspector Debug Agent
 
 Uses Claude + App Inspector API to diagnose why an SNS -> Lambda -> SQS
 pipeline is silently dropping messages. Runs in CI after the workload executes.
+
+All raw API data and Claude's diagnosis are saved to debug_report.json
+so you can load it into Claude Code for interactive follow-up questions.
 """
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 import anthropic
 import requests
 
 LOCALSTACK_URL = os.environ.get("LOCALSTACK_ENDPOINT", "http://localhost:4566")
 APPINSPECTOR_BASE = f"{LOCALSTACK_URL}/_localstack/appinspector"
+REPORT_PATH = os.environ.get("REPORT_PATH", "debug_report.json")
 
 client = anthropic.Anthropic()
+
+# Raw data collected during the run — saved to the report
+_collected: dict = {
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "localstack_url": LOCALSTACK_URL,
+    "api_calls": [],  # every App Inspector response, keyed by endpoint
+    "diagnosis": None,
+}
 
 TOOLS = [
     {
@@ -117,9 +130,13 @@ def call_api(method: str, path: str, body: dict | None = None) -> dict:
         else:
             return {"error": f"Unsupported method: {method}"}
         resp.raise_for_status()
-        return resp.json() if resp.content else {}
+        result = resp.json() if resp.content else {}
     except requests.RequestException as e:
-        return {"error": str(e)}
+        result = {"error": str(e)}
+
+    # Save every API response to the report
+    _collected["api_calls"].append({"endpoint": path, "method": method, "response": result})
+    return result
 
 
 def execute_tool(name: str, inputs: dict) -> dict:
@@ -142,6 +159,13 @@ def execute_tool(name: str, inputs: dict) -> dict:
     return {"error": f"Unknown tool: {name}"}
 
 
+def save_report(diagnosis: str):
+    _collected["diagnosis"] = diagnosis
+    with open(REPORT_PATH, "w") as f:
+        json.dump(_collected, f, indent=2)
+    print(f"\n[agent] Report saved to {REPORT_PATH}")
+
+
 def run_agent():
     print("=" * 60)
     print("App Inspector Debug Agent")
@@ -158,6 +182,8 @@ def run_agent():
         }
     ]
 
+    diagnosis_parts = []
+
     while True:
         response = client.messages.create(
             model="claude-opus-4-7",
@@ -171,6 +197,7 @@ def run_agent():
         for block in response.content:
             if block.type == "text":
                 print(block.text)
+                diagnosis_parts.append(block.text)
 
         if response.stop_reason == "end_turn":
             break
@@ -186,7 +213,6 @@ def run_agent():
         for call in tool_calls:
             print(f"\n[tool] {call.name}({json.dumps(call.input)})")
             result = execute_tool(call.name, call.input)
-            # Truncate large results for display only
             display = json.dumps(result)
             print(f"[tool] → {display[:400]}{'...' if len(display) > 400 else ''}")
             tool_results.append(
@@ -198,6 +224,8 @@ def run_agent():
             )
 
         messages.append({"role": "user", "content": tool_results})
+
+    save_report("\n\n".join(diagnosis_parts))
 
     print()
     print("=" * 60)

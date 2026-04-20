@@ -8,6 +8,7 @@ jobs:
     environment:
       LOCALSTACK_ENDPOINT: http://localhost:4566
       AWS_DEFAULT_REGION: us-east-1
+      REPORT_PATH: /tmp/debug_report.json
 
     steps:
       - checkout
@@ -67,9 +68,11 @@ jobs:
       - run:
           name: Run App Inspector debug agent
           working_directory: app-inspector-poc
-          command: |
-            echo "ANTHROPIC_API_KEY is set: $([ -n '$ANTHROPIC_API_KEY' ] && echo yes || echo NO)"
-            python3 agent/agent.py
+          command: python3 agent/agent.py
+
+      - store_artifacts:
+          path: /tmp/debug_report.json
+          destination: debug_report.json
 
 workflows:
   app-inspector-poc:
