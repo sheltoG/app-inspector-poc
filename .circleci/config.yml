@@ -15,7 +15,7 @@ jobs:
 
       - run:
           name: Install Python dependencies
-          command: pip3 install -r app-inspector-poc/requirements.txt
+          command: pip3 install -r requirements.txt
 
       - run:
           name: Start LocalStack Pro
@@ -53,12 +53,12 @@ jobs:
 
       - run:
           name: Deploy event-driven app (with bug)
-          working_directory: app-inspector-poc/app
+          working_directory: app
           command: python3 setup.py
 
       - run:
           name: Publish event (triggers the silent-drop bug)
-          working_directory: app-inspector-poc/app
+          working_directory: app
           command: python3 publish.py
 
       - run:
@@ -67,7 +67,7 @@ jobs:
 
       - run:
           name: Run App Inspector debug agent
-          working_directory: app-inspector-poc
+          working_directory: .
           command: python3 agent/agent.py
 
       - store_artifacts:
