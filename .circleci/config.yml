@@ -1,0 +1,77 @@
+version: 2.1
+
+jobs:
+  app-inspector-poc:
+    machine:
+      image: ubuntu-2204:current
+
+    environment:
+      LOCALSTACK_ENDPOINT: http://localhost:4566
+      AWS_DEFAULT_REGION: us-east-1
+
+    steps:
+      - checkout
+
+      - run:
+          name: Install Python dependencies
+          command: pip3 install -r app-inspector-poc/requirements.txt
+
+      - run:
+          name: Start LocalStack Pro
+          command: |
+            docker run -d \
+              --name localstack \
+              -p 4566:4566 \
+              -e LOCALSTACK_AUTH_TOKEN=$LOCALSTACK_AUTH_TOKEN \
+              -e APPINSPECTOR_ENABLED=1 \
+              localstack/localstack-pro:latest
+
+      - run:
+          name: Wait for LocalStack to be ready
+          command: |
+            echo "Waiting for LocalStack..."
+            for i in $(seq 1 40); do
+              STATUS=$(curl -s http://localhost:4566/_localstack/health 2>/dev/null || echo "")
+              if echo "$STATUS" | grep -q '"running"'; then
+                echo "LocalStack is ready."
+                break
+              fi
+              echo "  attempt $i/40 — not ready yet"
+              sleep 5
+            done
+            curl -s http://localhost:4566/_localstack/health | python3 -m json.tool
+
+      - run:
+          name: Enable App Inspector
+          command: |
+            curl -s -X PUT http://localhost:4566/_localstack/appinspector/status \
+              -H "Content-Type: application/json" \
+              -d '{"status": "enabled"}'
+            echo ""
+            echo "App Inspector enabled."
+
+      - run:
+          name: Deploy event-driven app (with bug)
+          working_directory: app-inspector-poc/app
+          command: python3 setup.py
+
+      - run:
+          name: Publish event (triggers the silent-drop bug)
+          working_directory: app-inspector-poc/app
+          command: python3 publish.py
+
+      - run:
+          name: Wait for traces to be captured
+          command: sleep 5
+
+      - run:
+          name: Run App Inspector debug agent
+          working_directory: app-inspector-poc
+          command: |
+            echo "ANTHROPIC_API_KEY is set: $([ -n '$ANTHROPIC_API_KEY' ] && echo yes || echo NO)"
+            python3 agent/agent.py
+
+workflows:
+  app-inspector-poc:
+    jobs:
+      - app-inspector-poc
